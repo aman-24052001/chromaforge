@@ -1,2 +1,2 @@
-:HL["/chromaforge/_next/static/chunks/17e-2866kdim6.css","style"]
-0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"/_not-found","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"ctU021oL0aEdmTlz6NfZb"}
+:HL["/chromaforge/_next/static/chunks/1c65ay2nfqvpr.css","style"]
+0:{"tree":{"name":"","param":null,"prefetchHints":16,"slots":{"children":{"name":"/_not-found","param":null,"prefetchHints":0,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":0,"slots":null}}}}},"staleTime":300,"buildId":"WZm_7C8J_YcuIzeUv1O3K"}
