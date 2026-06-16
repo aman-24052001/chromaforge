@@ -184,16 +184,28 @@ export default function ChromaForge() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col">
-        <p className="mono text-xs mb-2.5" style={{ color: "#666", letterSpacing: "0.1em" }}>HARMONY</p>
-        <div className="grid grid-cols-2 gap-2.5 flex-1">
-          {HARMONY_OPTIONS.map(o => (
-            <button key={o.id} onClick={() => applyHarmony(o.id)} className="rounded-2xl text-left border transition-all flex flex-col justify-center px-4"
-              style={{ background: harmony===o.id?palette.primary+"18":"#111", borderColor: harmony===o.id?palette.primary:"#2a2a2a" }}>
-              <p className="text-base font-semibold" style={{ color: harmony===o.id?palette.primary:"#aaa" }}>{o.label}</p>
-              <p className="mono text-xs mt-1" style={{ color: "#555" }}>{o.desc}</p>
-            </button>
-          ))}
+      <div className="flex-1 flex flex-col min-h-0 justify-end">
+        <p className="mono text-xs mb-2.5 flex-shrink-0" style={{ color: "#666", letterSpacing: "0.1em" }}>HARMONY</p>
+        <div className="grid grid-cols-2 gap-2.5" style={{ gridAutoRows: "minmax(0, 1fr)", maxHeight: 340, flex: "0 0 auto", height: "100%" }}>
+          {HARMONY_OPTIONS.map(o => {
+            const preview = generatePalette(color, o.id);
+            const active = harmony === o.id;
+            return (
+              <button key={o.id} onClick={() => applyHarmony(o.id)}
+                className="rounded-2xl text-left border transition-all flex flex-col p-3.5 overflow-hidden"
+                style={{ background: active?preview.primary+"18":"#111", borderColor: active?preview.primary:"#2a2a2a" }}>
+                <div className="flex gap-1.5">
+                  {[preview.primary, preview.accent, preview.support].map((c,i) => (
+                    <div key={i} className="rounded-md flex-1" style={{ background: c, height: 28 }}/>
+                  ))}
+                </div>
+                <div className="mt-auto pt-3">
+                  <p className="text-base font-semibold leading-tight" style={{ color: active?preview.primary:"#ddd" }}>{o.label}</p>
+                  <p className="mono text-xs mt-0.5" style={{ color: "#666" }}>{o.desc}</p>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>
