@@ -1,626 +1,570 @@
 "use client";
-
-import { useState, useCallback, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Copy, Check, Save, RefreshCw, Trash2, ChevronDown, Palette, Type, Maximize2, Code, Droplets, X } from "lucide-react";
 import {
-  Copy, Check, Palette, Type, Maximize2, Save, Trash2, Download,
-  ChevronRight, Droplets, RefreshCw
-} from "lucide-react";
-import {
-  hexToHsl, hslToHex, generateGoldenPalette, generateComplementary,
-  generateTriadic, generateAnalogous, generateSpacingScale,
-  paletteToCssVars, paletteToTailwind,
-  GOOGLE_FONTS_DISPLAY, GOOGLE_FONTS_BODY,
-  type ColorPalette, type FontConfig
+  hexToHsl, hslToHex, generatePalette, generateSpacingScale,
+  paletteToCss, paletteToTailwind,
+  DISPLAY_FONTS, BODY_FONTS, HARMONY_OPTIONS, PRESET_COLORS,
+  type ColorPalette, type FontConfig,
 } from "./lib/colorEngine";
 
-type Tab = "colors" | "typography" | "spacing";
-type Harmony = "golden" | "complementary" | "triadic" | "analogous";
-type ExportMode = "css" | "tailwind";
+type Tab = "colors" | "type" | "spacing" | "export";
+type ExportFmt = "css" | "tailwind";
 
-interface SavedPalette {
-  id: string;
-  name: string;
-  color: string;
-  harmony: Harmony;
-  palette: ColorPalette;
+interface Saved {
+  id: string; label: string; color: string; harmony: string; palette: ColorPalette;
 }
 
-const HARMONY_LABELS: Record<Harmony, string> = {
-  golden: "Golden Ratio",
-  complementary: "Complementary",
-  triadic: "Triadic",
-  analogous: "Analogous",
-};
+const TAB_CONFIG: { id: Tab; icon: React.ReactNode; label: string }[] = [
+  { id: "colors",  icon: <Palette size={18}/>,  label: "Colors"   },
+  { id: "type",    icon: <Type size={18}/>,      label: "Type"     },
+  { id: "spacing", icon: <Maximize2 size={18}/>, label: "Space"    },
+  { id: "export",  icon: <Code size={18}/>,      label: "Export"   },
+];
 
-function generatePalette(color: string, harmony: Harmony): ColorPalette {
-  switch (harmony) {
-    case "golden": return generateGoldenPalette(color);
-    case "complementary": return generateComplementary(color);
-    case "triadic": return generateTriadic(color);
-    case "analogous": return generateAnalogous(color);
-  }
+function Swatch({ label, hex, onCopy }: { label: string; hex: string; onCopy: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const handle = () => { navigator.clipboard.writeText(hex); setCopied(true); onCopy(); setTimeout(() => setCopied(false), 1500); };
+  return (
+    <button onClick={handle}
+      className="flex-shrink-0 flex flex-col rounded-2xl overflow-hidden border transition-transform active:scale-95"
+      style={{ width: 100, borderColor: "#2a2a2a", background: "#111" }}>
+      <div style={{ background: hex, height: 64, width: "100%" }} />
+      <div className="px-2.5 py-2">
+        <p className="text-xs font-medium" style={{ color: "#f0f0f0" }}>{label}</p>
+        <p className="mono text-xs mt-0.5" style={{ color: "#666", fontSize: 10 }}>{hex.toUpperCase()}</p>
+        <div className="mt-1.5 flex items-center justify-center h-5">
+          {copied ? <Check size={11} color="#22c55e"/> : <Copy size={11} color="#444"/>}
+        </div>
+      </div>
+    </button>
+  );
 }
 
-export default function Home() {
+function FontPill({ name, selected, role, onSelect }: { name: string; selected: boolean; role: "display" | "body"; onSelect: () => void }) {
+  return (
+    <button onClick={onSelect}
+      className="w-full text-left px-4 py-3 rounded-xl transition-all active:scale-98 border"
+      style={{
+        background: selected ? "#1a1a1a" : "transparent",
+        borderColor: selected ? "#fbbf24" : "#2a2a2a",
+      }}>
+      <span style={{
+        fontFamily: `'${name}', ${role === "display" ? "serif" : "sans-serif"}`,
+        fontSize: 16,
+        color: selected ? "#f0f0f0" : "#888",
+        fontWeight: role === "display" ? 600 : 400,
+      }}>{name}</span>
+    </button>
+  );
+}
+
+export default function ChromaForge() {
   const [tab, setTab] = useState<Tab>("colors");
   const [color, setColor] = useState("#008CBB");
-  const [harmony, setHarmony] = useState<Harmony>("golden");
-  const [palette, setPalette] = useState<ColorPalette>(generateGoldenPalette("#008CBB"));
-  const [fonts, setFonts] = useState<FontConfig>({ display: "Fraunces", body: "Inter", baseSize: 16 });
+  const [harmony, setHarmony] = useState("golden");
+  const [palette, setPalette] = useState<ColorPalette>(() => generatePalette("#008CBB", "golden"));
+  const [fonts, setFonts] = useState<FontConfig>({ display: "Space Grotesk", body: "Inter", baseSize: 16 });
   const [spacing, setSpacing] = useState(8);
-  const [exportMode, setExportMode] = useState<ExportMode>("css");
-  const [saved, setSaved] = useState<SavedPalette[]>([]);
-  const [copied, setCopied] = useState<string | null>(null);
+  const [exportFmt, setExportFmt] = useState<ExportFmt>("css");
+  const [saved, setSaved] = useState<Saved[]>([]);
+  const [loadedFonts, setLoadedFonts] = useState(new Set(["Space Grotesk", "Inter"]));
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [exportCopied, setExportCopied] = useState(false);
-  const [fontsLoaded, setFontsLoaded] = useState<Set<string>>(new Set(["Inter", "Fraunces"]));
+  const [showSaved, setShowSaved] = useState(false);
+  const hexInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const raw = localStorage.getItem("chromaforge-saved");
-    if (raw) setSaved(JSON.parse(raw));
+    try { const r = localStorage.getItem("cf-saved"); if (r) setSaved(JSON.parse(r)); } catch {}
   }, []);
 
-  const updateColor = useCallback((hex: string) => {
-    setColor(hex);
-    setPalette(generatePalette(hex, harmony));
+  const applyColor = useCallback((hex: string, h = harmony) => {
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return;
+    setColor(hex); setPalette(generatePalette(hex, h));
   }, [harmony]);
 
-  const updateHarmony = useCallback((h: Harmony) => {
-    setHarmony(h);
-    setPalette(generatePalette(color, h));
-  }, [color]);
+  const applyHarmony = (h: string) => { setHarmony(h); setPalette(generatePalette(color, h)); };
 
-  const loadFont = (family: string) => {
-    if (fontsLoaded.has(family)) return;
+  const loadFont = (name: string) => {
+    if (loadedFonts.has(name)) return;
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = `https://fonts.googleapis.com/css2?family=${family.replace(/ /g, "+")}:wght@300;400;600;700&display=swap`;
+    link.href = `https://fonts.googleapis.com/css2?family=${name.replace(/ /g,"+")}:wght@300;400;600;700&display=swap`;
     document.head.appendChild(link);
-    setFontsLoaded(prev => new Set([...prev, family]));
-  };
-
-  const copyColor = (hex: string, key: string) => {
-    navigator.clipboard.writeText(hex);
-    setCopied(key);
-    setTimeout(() => setCopied(null), 1500);
-  };
-
-  const copyExport = () => {
-    const text = exportMode === "css"
-      ? paletteToCssVars(palette, fonts, spacing)
-      : paletteToTailwind(palette, fonts, spacing);
-    navigator.clipboard.writeText(text);
-    setExportCopied(true);
-    setTimeout(() => setExportCopied(false), 2000);
+    setLoadedFonts(p => new Set([...p, name]));
   };
 
   const savePalette = () => {
     const { h } = hexToHsl(color);
-    const name = `${HARMONY_LABELS[harmony]} · ${Math.round(h)}°`;
-    const entry: SavedPalette = {
+    const entry: Saved = {
       id: Date.now().toString(),
-      name,
-      color,
-      harmony,
-      palette,
+      label: `${harmony.charAt(0).toUpperCase()+harmony.slice(1)} ${Math.round(h)}°`,
+      color, harmony, palette,
     };
-    const next = [entry, ...saved].slice(0, 8);
+    const next = [entry, ...saved].slice(0, 10);
     setSaved(next);
-    localStorage.setItem("chromaforge-saved", JSON.stringify(next));
+    try { localStorage.setItem("cf-saved", JSON.stringify(next)); } catch {}
   };
 
   const deleteSaved = (id: string) => {
     const next = saved.filter(s => s.id !== id);
     setSaved(next);
-    localStorage.setItem("chromaforge-saved", JSON.stringify(next));
-  };
-
-  const loadSaved = (s: SavedPalette) => {
-    setColor(s.color);
-    setHarmony(s.harmony);
-    setPalette(s.palette);
+    try { localStorage.setItem("cf-saved", JSON.stringify(next)); } catch {}
   };
 
   const randomColor = () => {
-    const { h, s, l } = hexToHsl(color);
-    const newH = (h + 47 + Math.random() * 60) % 360;
-    const hex = hslToHex(newH, 60 + Math.random() * 30, 35 + Math.random() * 20);
-    updateColor(hex);
+    const { h } = hexToHsl(color);
+    const newHex = hslToHex((h + 67 + Math.random() * 100) % 360, 55 + Math.random() * 35, 32 + Math.random() * 25);
+    applyColor(newHex);
   };
 
-  const sp = generateSpacingScale(spacing);
   const swatches = [
     { key: "primary", label: "Primary", hex: palette.primary },
-    { key: "accent", label: "Accent", hex: palette.accent },
-    { key: "support", label: "Support", hex: palette.support },
-    { key: "background", label: "Background", hex: palette.background },
-    { key: "surface", label: "Surface", hex: palette.surface },
-    { key: "text", label: "Text", hex: palette.text },
-    { key: "muted", label: "Muted", hex: palette.muted },
+    { key: "accent",  label: "Accent",  hex: palette.accent  },
+    { key: "support", label: "Support", hex: palette.support  },
+    { key: "bg",      label: "BG",      hex: palette.background },
+    { key: "surface", label: "Surface", hex: palette.surface  },
+    { key: "text",    label: "Text",    hex: palette.text     },
+    { key: "muted",   label: "Muted",   hex: palette.muted    },
   ];
 
-  const exportText = exportMode === "css"
-    ? paletteToCssVars(palette, fonts, spacing)
+  const exportCode = exportFmt === "css"
+    ? paletteToCss(palette, fonts, spacing)
     : paletteToTailwind(palette, fonts, spacing);
 
-  return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col font-body"
-      style={{ background: "#060810", color: "#e8e8e8" }}>
+  const { h: hDeg, s: sDeg, l: lDeg } = hexToHsl(color);
 
-      {/* TOPBAR */}
-      <header className="flex items-center justify-between px-6 py-3 border-b"
-        style={{ borderColor: "#21262d", background: "#0d1117" }}>
-        <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-md flex items-center justify-center"
-            style={{ background: palette.primary }}>
-            <Droplets size={14} color="#fff" />
-          </div>
-          <span className="font-display text-lg font-semibold tracking-tight"
-            style={{ color: "#fbbf24" }}>
-            ChromaForge
-          </span>
-          <span className="text-xs px-2 py-0.5 rounded font-mono"
-            style={{ background: "#21262d", color: "#8b949e" }}>
-            v1.0
-          </span>
-        </div>
+  // ─── DESKTOP SIDE PANEL ─────────────────────────────
+  const InputPanel = () => (
+    <AnimatePresence mode="wait">
+      <motion.div key={tab}
+        initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.15 }}
+        className="flex flex-col gap-5 p-5 overflow-y-auto h-full">
 
-        {/* TABS */}
-        <div className="flex gap-1 p-1 rounded-lg" style={{ background: "#161b22" }}>
-          {(["colors", "typography", "spacing"] as Tab[]).map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              className="tab-btn px-4 py-1.5 rounded-md text-sm font-medium capitalize transition-all"
-              style={{
-                background: tab === t ? palette.primary : "transparent",
-                color: tab === t ? "#fff" : "#8b949e",
-              }}>
-              {t === "colors" && <span className="flex items-center gap-1.5"><Palette size={13} />{t}</span>}
-              {t === "typography" && <span className="flex items-center gap-1.5"><Type size={13} />{t}</span>}
-              {t === "spacing" && <span className="flex items-center gap-1.5"><Maximize2 size={13} />{t}</span>}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button onClick={savePalette}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all hover:opacity-80"
-            style={{ background: "#21262d", color: "#e8e8e8" }}>
-            <Save size={13} /> Save
-          </button>
-        </div>
-      </header>
-
-      {/* MAIN 3-PANEL LAYOUT */}
-      <div className="flex flex-1 overflow-hidden">
-
-        {/* LEFT: INPUT PANEL */}
-        <div className="w-72 flex flex-col border-r overflow-y-auto"
-          style={{ borderColor: "#21262d", background: "#0d1117" }}>
-          <div className="p-4 flex flex-col gap-5">
-
-            <AnimatePresence mode="wait">
-              {tab === "colors" && (
-                <motion.div key="colors"
-                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.15 }}
-                  className="flex flex-col gap-4">
-
-                  {/* Color Picker */}
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Base Color</label>
-                    <div className="flex gap-2 items-center">
-                      <div className="relative">
-                        <input type="color" value={color}
-                          onChange={e => updateColor(e.target.value)}
-                          className="w-12 h-12 rounded-lg cursor-pointer border-0 p-0.5"
-                          style={{ background: "#161b22", border: "2px solid #21262d" }} />
-                      </div>
-                      <div className="flex-1">
-                        <input type="text" value={color}
-                          onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) updateColor(e.target.value); }}
-                          className="w-full px-3 py-2 rounded-lg font-mono text-sm"
-                          style={{ background: "#161b22", border: "1px solid #21262d", color: "#e8e8e8" }} />
-                        <div className="text-xs mt-1 font-mono" style={{ color: "#8b949e" }}>
-                          {(() => { const { h, s, l } = hexToHsl(color); return `H:${Math.round(h)}° S:${Math.round(s)}% L:${Math.round(l)}%`; })()}
-                        </div>
-                      </div>
-                      <button onClick={randomColor}
-                        className="p-2 rounded-lg transition-all hover:opacity-80"
-                        style={{ background: "#161b22", border: "1px solid #21262d" }}
-                        title="Random color">
-                        <RefreshCw size={15} color="#8b949e" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Harmony */}
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Harmony Mode</label>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {(Object.keys(HARMONY_LABELS) as Harmony[]).map(h => (
-                        <button key={h} onClick={() => updateHarmony(h)}
-                          className="py-2 px-2 rounded-lg text-xs font-medium transition-all text-left"
-                          style={{
-                            background: harmony === h ? palette.primary + "22" : "#161b22",
-                            border: `1px solid ${harmony === h ? palette.primary : "#21262d"}`,
-                            color: harmony === h ? palette.primary : "#8b949e",
-                          }}>
-                          {HARMONY_LABELS[h]}
-                        </button>
-                      ))}
-                    </div>
-                    {harmony === "golden" && (
-                      <p className="text-xs mt-2 font-mono" style={{ color: "#8b949e" }}>
-                        Accent = H + 137.5° (φ)
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Saved Palettes */}
-                  {saved.length > 0 && (
-                    <div>
-                      <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                        style={{ color: "#8b949e" }}>Saved Palettes</label>
-                      <div className="flex flex-col gap-1.5">
-                        {saved.map(s => (
-                          <div key={s.id}
-                            className="flex items-center gap-2 p-2 rounded-lg cursor-pointer group transition-all"
-                            style={{ background: "#161b22", border: "1px solid #21262d" }}
-                            onClick={() => loadSaved(s)}>
-                            <div className="flex gap-0.5 flex-shrink-0">
-                              {[s.palette.primary, s.palette.accent, s.palette.support].map((c, i) => (
-                                <div key={i} className="w-4 h-4 rounded-sm" style={{ background: c }} />
-                              ))}
-                            </div>
-                            <span className="text-xs flex-1 truncate" style={{ color: "#8b949e" }}>{s.name}</span>
-                            <button onClick={e => { e.stopPropagation(); deleteSaved(s.id); }}
-                              className="opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Trash2 size={11} color="#ef4444" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </motion.div>
-              )}
-
-              {tab === "typography" && (
-                <motion.div key="typography"
-                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.15 }}
-                  className="flex flex-col gap-4">
-
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Display Font</label>
-                    <div className="flex flex-col gap-1">
-                      {GOOGLE_FONTS_DISPLAY.map(f => (
-                        <button key={f} onClick={() => { loadFont(f); setFonts(p => ({ ...p, display: f })); }}
-                          className="px-3 py-2 rounded-lg text-sm text-left transition-all"
-                          style={{
-                            fontFamily: `'${f}', serif`,
-                            background: fonts.display === f ? palette.primary + "22" : "#161b22",
-                            border: `1px solid ${fonts.display === f ? palette.primary : "#21262d"}`,
-                            color: fonts.display === f ? palette.primary : "#e8e8e8",
-                          }}>
-                          {f}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Body Font</label>
-                    <div className="flex flex-col gap-1">
-                      {GOOGLE_FONTS_BODY.map(f => (
-                        <button key={f} onClick={() => { loadFont(f); setFonts(p => ({ ...p, body: f })); }}
-                          className="px-3 py-2 rounded-lg text-sm text-left transition-all"
-                          style={{
-                            fontFamily: `'${f}', sans-serif`,
-                            background: fonts.body === f ? palette.primary + "22" : "#161b22",
-                            border: `1px solid ${fonts.body === f ? palette.primary : "#21262d"}`,
-                            color: fonts.body === f ? palette.primary : "#e8e8e8",
-                          }}>
-                          {f}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Base Font Size: {fonts.baseSize}px</label>
-                    <input type="range" min={12} max={20} value={fonts.baseSize}
-                      onChange={e => setFonts(p => ({ ...p, baseSize: Number(e.target.value) }))}
-                      className="w-full" />
-                  </div>
-                </motion.div>
-              )}
-
-              {tab === "spacing" && (
-                <motion.div key="spacing"
-                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.15 }}
-                  className="flex flex-col gap-4">
-
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Base Unit</label>
-                    <div className="flex gap-2">
-                      {[4, 8, 16].map(u => (
-                        <button key={u} onClick={() => setSpacing(u)}
-                          className="flex-1 py-2 rounded-lg text-sm font-mono font-medium transition-all"
-                          style={{
-                            background: spacing === u ? palette.primary + "22" : "#161b22",
-                            border: `1px solid ${spacing === u ? palette.primary : "#21262d"}`,
-                            color: spacing === u ? palette.primary : "#8b949e",
-                          }}>
-                          {u}px
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Spacing Scale</label>
-                    <div className="flex flex-col gap-2">
-                      {Object.entries(sp).map(([key, val]) => (
-                        <div key={key} className="flex items-center gap-3">
-                          <span className="text-xs font-mono w-8" style={{ color: "#8b949e" }}>{key}</span>
-                          <div className="rounded-sm" style={{
-                            width: `${Math.min(val * 2, 160)}px`, height: "8px",
-                            background: palette.primary + "66",
-                          }} />
-                          <span className="text-xs font-mono" style={{ color: "#8b949e" }}>{val}px</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-mono uppercase tracking-widest mb-2 block"
-                      style={{ color: "#8b949e" }}>Border Radius</label>
-                    <div className="flex gap-2">
-                      {["sm", "md", "lg"].map((r, i) => {
-                        const radii = [spacing * 0.5, spacing, spacing * 2];
-                        return (
-                          <div key={r} className="flex flex-col items-center gap-1">
-                            <div className="w-10 h-10" style={{
-                              background: palette.primary + "33",
-                              border: `2px solid ${palette.primary}`,
-                              borderRadius: `${radii[i]}px`,
-                            }} />
-                            <span className="text-xs font-mono" style={{ color: "#8b949e" }}>{r}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
-
-        {/* CENTER: LIVE PREVIEW */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto p-6"
-            style={{ background: palette.background }}>
-            
-            {/* Preview label */}
-            <div className="flex items-center gap-2 mb-4">
-              <span className="text-xs font-mono uppercase tracking-widest px-2 py-0.5 rounded"
-                style={{ background: palette.surface, color: palette.muted, border: `1px solid ${palette.muted}33` }}>
-                Live Preview
-              </span>
-              <span className="text-xs font-mono" style={{ color: palette.muted }}>
-                {palette.background}
-              </span>
-            </div>
-
-            {/* HERO CARD */}
-            <div className="rounded-xl p-6 mb-4"
-              style={{ background: palette.surface, border: `1px solid ${palette.primary}22` }}>
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-xs font-mono uppercase tracking-widest mb-1"
-                    style={{ color: palette.accent, fontFamily: `'JetBrains Mono', monospace` }}>
-                    Design System
-                  </p>
-                  <h1 style={{
-                    fontFamily: `'${fonts.display}', serif`,
-                    fontSize: `${fonts.baseSize * 2.2}px`,
-                    color: palette.text,
-                    fontWeight: 600,
-                    lineHeight: 1.1,
-                  }}>
-                    ChromaForge
-                  </h1>
-                </div>
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center"
-                  style={{ background: palette.primary }}>
-                  <Droplets size={18} color="#fff" />
-                </div>
-              </div>
-              <p style={{
-                fontFamily: `'${fonts.body}', sans-serif`,
-                fontSize: `${fonts.baseSize}px`,
-                color: palette.muted,
-                lineHeight: 1.6,
-                marginBottom: `${spacing * 2}px`,
-              }}>
-                Build complete design systems from a single color. Every decision — colors, type, spacing — generated and ready to ship.
-              </p>
-              <div className="flex gap-2 flex-wrap">
-                <button className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                  style={{
-                    background: palette.primary, color: "#fff",
-                    fontFamily: `'${fonts.body}', sans-serif`,
-                    fontSize: `${fonts.baseSize * 0.875}px`,
-                    borderRadius: `${spacing}px`,
-                  }}>
-                  Get Started →
-                </button>
-                <button className="px-4 py-2 rounded-lg text-sm font-medium"
-                  style={{
-                    background: "transparent",
-                    border: `1px solid ${palette.primary}55`,
-                    color: palette.primary,
-                    fontFamily: `'${fonts.body}', sans-serif`,
-                    fontSize: `${fonts.baseSize * 0.875}px`,
-                    borderRadius: `${spacing}px`,
-                  }}>
-                  View Docs
-                </button>
-                <span className="px-3 py-2 rounded-full text-xs font-mono"
-                  style={{ background: palette.accent + "22", color: palette.accent }}>
-                  Golden Ratio ✦
-                </span>
-              </div>
-            </div>
-
-            {/* TYPOGRAPHY PREVIEW */}
-            <div className="rounded-xl p-5 mb-4"
-              style={{ background: palette.surface, border: `1px solid ${palette.muted}22` }}>
-              <p className="text-xs font-mono uppercase tracking-widest mb-3"
-                style={{ color: palette.muted }}>Typography</p>
-              <div style={{ fontFamily: `'${fonts.display}', serif`, color: palette.text }}>
-                <p style={{ fontSize: `${fonts.baseSize * 2.5}px`, fontWeight: 300, lineHeight: 1 }}>Display</p>
-                <p style={{ fontSize: `${fonts.baseSize * 1.5}px`, fontWeight: 600 }}>Heading Level</p>
-              </div>
-              <p style={{
-                fontFamily: `'${fonts.body}', sans-serif`,
-                fontSize: `${fonts.baseSize}px`,
-                color: palette.muted, lineHeight: 1.7, marginTop: `${spacing}px`
-              }}>
-                Body text flows here. The quick brown fox jumps over the lazy dog. Typography is the backbone of every design system.
-              </p>
-              <p style={{
-                fontFamily: `'JetBrains Mono', monospace`,
-                fontSize: `${fonts.baseSize * 0.8}px`,
-                color: palette.accent, marginTop: `${spacing}px`
-              }}>
-                const theme = ChromaForge.generate('{color}');
-              </p>
-            </div>
-
-            {/* COMPONENT SAMPLES */}
-            <div className="grid grid-cols-2 gap-3">
-              {/* Badge + stat card */}
-              <div className="rounded-xl p-4"
-                style={{ background: palette.surface, border: `1px solid ${palette.support}33` }}>
-                <p className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: palette.muted }}>Components</p>
-                <div className="flex gap-1 flex-wrap mb-3">
-                  {["Primary", "Accent", "Muted"].map((label, i) => {
-                    const colors = [palette.primary, palette.accent, palette.muted];
-                    return (
-                      <span key={label} className="px-2 py-0.5 rounded-full text-xs"
-                        style={{ background: colors[i] + "22", color: colors[i], fontFamily: `'${fonts.body}', sans-serif` }}>
-                        {label}
-                      </span>
-                    );
-                  })}
-                </div>
-                <div className="flex flex-col gap-1">
-                  {["Design Token", "Color Theory", "Type Scale"].map((item, i) => (
-                    <div key={item} className="flex items-center gap-2 py-1.5 px-2 rounded-lg"
-                      style={{ background: palette.background }}>
-                      <div className="w-1.5 h-1.5 rounded-full" style={{ background: [palette.primary, palette.accent, palette.support][i] }} />
-                      <span style={{ fontSize: `${fonts.baseSize * 0.8}px`, color: palette.text, fontFamily: `'${fonts.body}', sans-serif` }}>{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Stats */}
-              <div className="rounded-xl p-4"
-                style={{ background: palette.surface, border: `1px solid ${palette.accent}33` }}>
-                <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: palette.muted }}>Metrics</p>
-                {[
-                  { label: "Colors", val: "7", accent: palette.primary },
-                  { label: "Fonts", val: "2", accent: palette.accent },
-                  { label: "Tokens", val: "24+", accent: palette.support },
-                ].map(({ label, val, accent }) => (
-                  <div key={label} className="flex items-center justify-between mb-2">
-                    <span style={{ fontSize: `${fonts.baseSize * 0.875}px`, color: palette.muted, fontFamily: `'${fonts.body}', sans-serif` }}>{label}</span>
-                    <span style={{ fontSize: `${fonts.baseSize * 1.1}px`, fontWeight: 700, color: accent, fontFamily: `'JetBrains Mono', monospace` }}>{val}</span>
-                  </div>
-                ))}
-                <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${palette.muted}22` }}>
-                  <div className="flex gap-1">
-                    {[palette.primary, palette.accent, palette.support, palette.muted].map((c, i) => (
-                      <div key={i} className="flex-1 h-1.5 rounded-full" style={{ background: c }} />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT: EXPORT + SWATCHES */}
-        <div className="w-72 flex flex-col border-l overflow-hidden"
-          style={{ borderColor: "#21262d", background: "#0d1117" }}>
-
-          {/* COLOR SWATCHES */}
-          <div className="p-4 border-b" style={{ borderColor: "#21262d" }}>
-            <p className="text-xs font-mono uppercase tracking-widest mb-3" style={{ color: "#8b949e" }}>
-              Palette · {HARMONY_LABELS[harmony]}
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {swatches.map(({ key, label, hex }) => (
-                <button key={key} onClick={() => copyColor(hex, key)}
-                  className="swatch flex items-center gap-2.5 p-2 rounded-lg w-full group transition-all"
-                  style={{ background: "#161b22", border: "1px solid #21262d" }}>
-                  <div className="w-8 h-8 rounded-md flex-shrink-0" style={{ background: hex }} />
-                  <div className="flex-1 text-left">
-                    <p className="text-xs font-medium" style={{ color: "#e8e8e8" }}>{label}</p>
-                    <p className="text-xs font-mono" style={{ color: "#8b949e" }}>{hex.toUpperCase()}</p>
-                  </div>
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    {copied === key ? <Check size={13} color="#22c55e" /> : <Copy size={13} color="#8b949e" />}
-                  </div>
-                </button>
+        {tab === "colors" && <>
+          {/* Big color display */}
+          <div className="rounded-2xl overflow-hidden border" style={{ borderColor: "#2a2a2a" }}>
+            <div className="transition-color-bar" style={{ background: palette.primary, height: 80 }}/>
+            <div className="flex gap-1 p-3" style={{ background: "#111" }}>
+              {[palette.primary, palette.accent, palette.support, palette.muted].map((c,i) => (
+                <div key={i} className="flex-1 h-6 rounded-md" style={{ background: c }}/>
               ))}
             </div>
           </div>
 
-          {/* EXPORT PANEL */}
-          <div className="flex-1 flex flex-col p-4 overflow-hidden">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-mono uppercase tracking-widest" style={{ color: "#8b949e" }}>Export</p>
-              <div className="flex gap-1 p-0.5 rounded-md" style={{ background: "#161b22" }}>
-                {(["css", "tailwind"] as ExportMode[]).map(m => (
-                  <button key={m} onClick={() => setExportMode(m)}
-                    className="px-2 py-0.5 rounded text-xs font-mono transition-all"
-                    style={{
-                      background: exportMode === m ? palette.primary : "transparent",
-                      color: exportMode === m ? "#fff" : "#8b949e",
-                    }}>
-                    {m === "css" ? "CSS" : "TW"}
-                  </button>
-                ))}
+          {/* Picker row */}
+          <div>
+            <p className="mono text-xs mb-2" style={{ color: "#666", letterSpacing: "0.1em" }}>BASE COLOR</p>
+            <div className="flex gap-3 items-center">
+              <input type="color" value={color} onChange={e => applyColor(e.target.value)}
+                className="rounded-xl cursor-pointer" style={{ width: 52, height: 52 }}/>
+              <div className="flex-1">
+                <input ref={hexInputRef} type="text" value={color}
+                  onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) { if (e.target.value.length === 7) applyColor(e.target.value); else setColor(e.target.value); }}}
+                  className="mono w-full px-3 py-2.5 rounded-xl text-sm border outline-none"
+                  style={{ background: "#1a1a1a", borderColor: "#2a2a2a", color: "#f0f0f0" }}/>
+                <p className="mono text-xs mt-1" style={{ color: "#444" }}>
+                  {Math.round(hDeg)}° {Math.round(sDeg)}% {Math.round(lDeg)}%
+                </p>
               </div>
+              <button onClick={randomColor} className="p-3 rounded-xl border transition-colors"
+                style={{ background: "#1a1a1a", borderColor: "#2a2a2a" }}>
+                <RefreshCw size={16} color="#666"/>
+              </button>
             </div>
+          </div>
 
-            <div className="flex-1 overflow-y-auto rounded-lg p-3 font-mono text-xs leading-relaxed mb-3"
-              style={{ background: "#161b22", color: "#8b949e", border: "1px solid #21262d" }}>
-              <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{exportText}</pre>
+          {/* Presets */}
+          <div>
+            <p className="mono text-xs mb-2" style={{ color: "#666", letterSpacing: "0.1em" }}>PRESETS</p>
+            <div className="flex gap-2 flex-wrap">
+              {PRESET_COLORS.map(c => (
+                <button key={c} onClick={() => applyColor(c)}
+                  className="rounded-lg transition-transform active:scale-90 border-2"
+                  style={{ width: 32, height: 32, background: c, borderColor: color === c ? "#fbbf24" : "transparent" }}/>
+              ))}
             </div>
+          </div>
 
-            <button onClick={copyExport}
-              className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all"
-              style={{ background: exportCopied ? "#22c55e" : palette.primary, color: "#fff" }}>
-              {exportCopied ? <><Check size={14} /> Copied!</> : <><Download size={14} /> Copy {exportMode === "css" ? "CSS Vars" : "Tailwind Config"}</>}
-            </button>
+          {/* Harmony */}
+          <div>
+            <p className="mono text-xs mb-2" style={{ color: "#666", letterSpacing: "0.1em" }}>HARMONY</p>
+            <div className="grid grid-cols-2 gap-2">
+              {HARMONY_OPTIONS.map(opt => (
+                <button key={opt.id} onClick={() => applyHarmony(opt.id)}
+                  className="py-2.5 px-3 rounded-xl text-left border transition-all"
+                  style={{
+                    background: harmony === opt.id ? palette.primary + "18" : "#111",
+                    borderColor: harmony === opt.id ? palette.primary : "#2a2a2a",
+                  }}>
+                  <p className="text-sm font-medium" style={{ color: harmony === opt.id ? palette.primary : "#888" }}>{opt.label}</p>
+                  <p className="mono text-xs mt-0.5" style={{ color: "#444" }}>{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>}
+
+        {tab === "type" && <>
+          <div>
+            <p className="mono text-xs mb-3" style={{ color: "#666", letterSpacing: "0.1em" }}>DISPLAY FONT</p>
+            <div className="flex flex-col gap-1.5">
+              {DISPLAY_FONTS.map(f => (
+                <FontPill key={f} name={f} selected={fonts.display === f} role="display"
+                  onSelect={() => { loadFont(f); setFonts(p => ({...p, display: f})); }}/>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mono text-xs mb-3 mt-2" style={{ color: "#666", letterSpacing: "0.1em" }}>BODY FONT</p>
+            <div className="flex flex-col gap-1.5">
+              {BODY_FONTS.map(f => (
+                <FontPill key={f} name={f} selected={fonts.body === f} role="body"
+                  onSelect={() => { loadFont(f); setFonts(p => ({...p, body: f})); }}/>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mono text-xs mb-3" style={{ color: "#666", letterSpacing: "0.1em" }}>BASE SIZE — {fonts.baseSize}px</p>
+            <input type="range" min={12} max={20} value={fonts.baseSize}
+              onChange={e => setFonts(p => ({...p, baseSize: +e.target.value}))}/>
+          </div>
+        </>}
+
+        {tab === "spacing" && <>
+          <div>
+            <p className="mono text-xs mb-3" style={{ color: "#666", letterSpacing: "0.1em" }}>BASE UNIT</p>
+            <div className="flex gap-2">
+              {[4, 8, 16].map(u => (
+                <button key={u} onClick={() => setSpacing(u)}
+                  className="flex-1 py-3 rounded-xl font-medium border transition-all mono"
+                  style={{
+                    background: spacing === u ? palette.primary + "18" : "#111",
+                    borderColor: spacing === u ? palette.primary : "#2a2a2a",
+                    color: spacing === u ? palette.primary : "#666",
+                  }}>{u}px</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mono text-xs mb-3" style={{ color: "#666", letterSpacing: "0.1em" }}>SCALE</p>
+            <div className="flex flex-col gap-3">
+              {Object.entries(generateSpacingScale(spacing)).map(([key, val]) => (
+                <div key={key} className="flex items-center gap-3">
+                  <span className="mono text-xs w-8" style={{ color: "#444" }}>{key}</span>
+                  <div className="h-2 rounded-full" style={{ width: Math.min(val * 1.5, 180), background: palette.primary + "55" }}/>
+                  <span className="mono text-xs ml-auto" style={{ color: "#666" }}>{val}px</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mono text-xs mb-3" style={{ color: "#666", letterSpacing: "0.1em" }}>RADIUS</p>
+            <div className="flex gap-4 items-end">
+              {[["sm", spacing * 0.5], ["md", spacing], ["lg", spacing * 2]].map(([label, r]) => (
+                <div key={label} className="flex flex-col items-center gap-2">
+                  <div className="w-12 h-12 border-2" style={{ borderColor: palette.primary, borderRadius: `${r}px`, background: palette.primary + "12" }}/>
+                  <span className="mono text-xs" style={{ color: "#666" }}>{label}</span>
+                  <span className="mono text-xs" style={{ color: "#444" }}>{r}px</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>}
+
+        {tab === "export" && <>
+          <div className="flex gap-2">
+            {(["css", "tailwind"] as ExportFmt[]).map(f => (
+              <button key={f} onClick={() => setExportFmt(f)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium border transition-all mono"
+                style={{
+                  background: exportFmt === f ? palette.primary : "#111",
+                  borderColor: exportFmt === f ? palette.primary : "#2a2a2a",
+                  color: exportFmt === f ? "#fff" : "#666",
+                }}>{f === "css" ? "CSS Vars" : "Tailwind"}</button>
+            ))}
+          </div>
+          <div className="flex-1 overflow-y-auto rounded-2xl p-4 border mono text-xs leading-relaxed"
+            style={{ background: "#0d0d0d", borderColor: "#2a2a2a", color: "#888", minHeight: 200 }}>
+            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{exportCode}</pre>
+          </div>
+          <button onClick={() => { navigator.clipboard.writeText(exportCode); setExportCopied(true); setTimeout(() => setExportCopied(false), 2000); }}
+            className="py-3 rounded-xl font-semibold text-sm transition-all flex items-center justify-center gap-2"
+            style={{ background: exportCopied ? "#22c55e" : palette.primary, color: "#fff" }}>
+            {exportCopied ? <><Check size={15}/> Copied!</> : <><Copy size={15}/> Copy Code</>}
+          </button>
+        </>}
+      </motion.div>
+    </AnimatePresence>
+  );
+
+  // ─── LIVE PREVIEW ────────────────────────────────────
+  const Preview = () => (
+    <div className="h-full overflow-y-auto p-5 flex flex-col gap-4"
+      style={{ background: palette.background, fontFamily: `'${fonts.body}', sans-serif` }}>
+
+      {/* Hero */}
+      <div className="rounded-2xl p-5 border" style={{ background: palette.surface, borderColor: palette.primary + "22" }}>
+        <p className="mono text-xs mb-1" style={{ color: palette.accent, letterSpacing: "0.12em" }}>DESIGN SYSTEM</p>
+        <h1 style={{ fontFamily: `'${fonts.display}', sans-serif`, fontSize: fonts.baseSize * 2.2, fontWeight: 700, color: palette.text, lineHeight: 1.1 }}>
+          ChromaForge
+        </h1>
+        <p style={{ color: palette.muted, fontSize: fonts.baseSize * 0.9, lineHeight: 1.6, marginTop: spacing, marginBottom: spacing * 1.5 }}>
+          From one color to a complete design system. Golden ratio harmony, live preview.
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          <button className="px-4 py-2 font-semibold text-sm"
+            style={{ background: palette.primary, color: "#fff", borderRadius: spacing, fontSize: fonts.baseSize * 0.875 }}>
+            Get Started
+          </button>
+          <button className="px-4 py-2 text-sm border"
+            style={{ background: "transparent", borderColor: palette.primary + "55", color: palette.primary, borderRadius: spacing, fontSize: fonts.baseSize * 0.875 }}>
+            Explore
+          </button>
+        </div>
+      </div>
+
+      {/* Type specimen */}
+      <div className="rounded-2xl p-5 border" style={{ background: palette.surface, borderColor: palette.muted + "22" }}>
+        <p className="mono text-xs mb-3" style={{ color: palette.muted, letterSpacing: "0.1em" }}>TYPOGRAPHY</p>
+        <p style={{ fontFamily: `'${fonts.display}', sans-serif`, fontSize: fonts.baseSize * 2.4, fontWeight: 300, color: palette.text, lineHeight: 1 }}>Aa</p>
+        <p style={{ fontFamily: `'${fonts.display}', sans-serif`, fontSize: fonts.baseSize * 1.4, fontWeight: 700, color: palette.text, marginTop: 4 }}>{fonts.display}</p>
+        <p style={{ color: palette.muted, fontSize: fonts.baseSize * 0.875, marginTop: 8, lineHeight: 1.65, fontFamily: `'${fonts.body}', sans-serif` }}>
+          {fonts.body} — The quick brown fox jumps over the lazy dog.
+        </p>
+        <p className="mono mt-2" style={{ fontSize: fonts.baseSize * 0.75, color: palette.accent }}>
+          const theme = forge('{color}');
+        </p>
+      </div>
+
+      {/* Badges + list */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-2xl p-4 border" style={{ background: palette.surface, borderColor: palette.muted + "22" }}>
+          <p className="mono text-xs mb-3" style={{ color: palette.muted, letterSpacing: "0.1em" }}>TOKENS</p>
+          {["Color","Type","Space"].map((item, i) => (
+            <div key={item} className="flex items-center gap-2 py-2"
+              style={{ borderBottom: i < 2 ? `1px solid ${palette.muted}18` : "none" }}>
+              <div className="w-2 h-2 rounded-full" style={{ background: [palette.primary, palette.accent, palette.support][i] }}/>
+              <span style={{ fontSize: fonts.baseSize * 0.8, color: palette.text }}>{item}</span>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-2xl p-4 border" style={{ background: palette.surface, borderColor: palette.accent + "22" }}>
+          <p className="mono text-xs mb-3" style={{ color: palette.muted, letterSpacing: "0.1em" }}>BADGES</p>
+          <div className="flex flex-col gap-2">
+            {[{ label: "Primary", c: palette.primary }, { label: "Accent", c: palette.accent }, { label: "Support", c: palette.support }].map(b => (
+              <span key={b.label} className="px-2 py-1 rounded-full text-xs font-medium inline-block w-fit"
+                style={{ background: b.c + "22", color: b.c }}>{b.label}</span>
+            ))}
           </div>
         </div>
       </div>
+
+      {/* Spacing ruler */}
+      <div className="rounded-2xl p-4 border" style={{ background: palette.surface, borderColor: palette.muted + "22" }}>
+        <p className="mono text-xs mb-3" style={{ color: palette.muted, letterSpacing: "0.1em" }}>SPACING · {spacing}px base</p>
+        <div className="flex items-end gap-1">
+          {Object.entries(generateSpacingScale(spacing)).slice(0, 5).map(([key, val]) => (
+            <div key={key} className="flex flex-col items-center gap-1">
+              <div className="rounded-sm w-5" style={{ height: Math.min(val * 1.2, 64), background: palette.primary + "55" }}/>
+              <span className="mono" style={{ fontSize: 8, color: palette.muted }}>{key}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="h-screen w-screen overflow-hidden flex flex-col" style={{ background: "#0a0a0a" }}>
+
+      {/* ── COLOR BAR (signature element) ── */}
+      <div className="transition-color-bar flex-shrink-0" style={{ background: palette.primary, height: 4 }}/>
+
+      {/* ── TOPBAR ── */}
+      <header className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+        style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center transition-color-bar"
+            style={{ background: palette.primary }}>
+            <Droplets size={14} color="#fff"/>
+          </div>
+          <span className="font-bold tracking-tight text-base" style={{ color: "#f0f0f0" }}>ChromaForge</span>
+          <span className="mono text-xs px-1.5 py-0.5 rounded" style={{ background: "#1a1a1a", color: "#444" }}>v2</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {saved.length > 0 && (
+            <button onClick={() => setShowSaved(p => !p)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all"
+              style={{ background: "#111", borderColor: "#2a2a2a", color: "#888" }}>
+              Saved <span className="mono" style={{ color: palette.accent }}>{saved.length}</span>
+              <ChevronDown size={12} className={showSaved ? "rotate-180" : ""} style={{ transition: "transform 0.2s" }}/>
+            </button>
+          )}
+          <button onClick={savePalette}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
+            style={{ background: "#111", borderColor: "#2a2a2a", color: "#f0f0f0" }}>
+            <Save size={13}/> Save
+          </button>
+        </div>
+      </header>
+
+      {/* ── SAVED DROPDOWN ── */}
+      <AnimatePresence>
+        {showSaved && (
+          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            className="absolute top-16 right-4 z-50 rounded-2xl border p-3 w-72 shadow-2xl"
+            style={{ background: "#111", borderColor: "#2a2a2a" }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="mono text-xs" style={{ color: "#666" }}>SAVED PALETTES</span>
+              <button onClick={() => setShowSaved(false)}><X size={14} color="#444"/></button>
+            </div>
+            <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto">
+              {saved.map(s => (
+                <div key={s.id} className="flex items-center gap-2 p-2 rounded-xl cursor-pointer group border transition-all"
+                  style={{ background: "#0d0d0d", borderColor: "#2a2a2a" }}
+                  onClick={() => { setColor(s.color); setHarmony(s.harmony); setPalette(s.palette); setShowSaved(false); }}>
+                  <div className="flex gap-0.5">
+                    {[s.palette.primary, s.palette.accent, s.palette.support].map((c,i) => (
+                      <div key={i} className="w-5 h-5 rounded-md" style={{ background: c }}/>
+                    ))}
+                  </div>
+                  <span className="text-xs flex-1" style={{ color: "#888" }}>{s.label}</span>
+                  <button className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={e => { e.stopPropagation(); deleteSaved(s.id); }}>
+                    <Trash2 size={12} color="#ef4444"/>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── SWATCH STRIP (always visible) ── */}
+      <div className="flex gap-2 px-4 py-2.5 overflow-x-auto flex-shrink-0"
+        style={{ background: "#0a0a0a", borderBottom: "1px solid #1a1a1a" }}>
+        {swatches.map(s => (
+          <button key={s.key}
+            onClick={() => { navigator.clipboard.writeText(s.hex); setCopiedKey(s.key); setTimeout(() => setCopiedKey(null), 1200); }}
+            className="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all active:scale-95"
+            style={{ background: "#111", borderColor: copiedKey === s.key ? s.hex : "#2a2a2a" }}>
+            <div className="w-5 h-5 rounded-md flex-shrink-0" style={{ background: s.hex }}/>
+            <div className="hidden sm:block">
+              <p className="text-xs font-medium leading-none" style={{ color: "#f0f0f0" }}>{s.label}</p>
+              <p className="mono text-xs leading-none mt-0.5" style={{ color: "#444", fontSize: 10 }}>{s.hex.toUpperCase()}</p>
+            </div>
+            {copiedKey === s.key && <Check size={11} color="#22c55e"/>}
+          </button>
+        ))}
+      </div>
+
+      {/* ── MAIN AREA ── */}
+      {/* MOBILE: tabs control full panel. DESKTOP: 3 columns */}
+      <div className="flex-1 flex overflow-hidden">
+
+        {/* DESKTOP LEFT PANEL */}
+        <div className="hidden md:flex w-72 flex-col border-r overflow-hidden flex-shrink-0"
+          style={{ borderColor: "#1a1a1a", background: "#0a0a0a" }}>
+          {/* Desktop tab pills */}
+          <div className="flex gap-1 p-3" style={{ borderBottom: "1px solid #1a1a1a" }}>
+            {TAB_CONFIG.filter(t => t.id !== "export").map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className="flex-1 py-2 rounded-lg text-xs font-medium transition-all"
+                style={{ background: tab === t.id ? palette.primary + "18" : "transparent", color: tab === t.id ? palette.primary : "#666", border: `1px solid ${tab === t.id ? palette.primary : "transparent"}` }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <InputPanel/>
+          </div>
+        </div>
+
+        {/* CENTER: LIVE PREVIEW */}
+        <div className="hidden md:flex flex-1 flex-col overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-2.5 flex-shrink-0" style={{ borderBottom: "1px solid #1a1a1a" }}>
+            <span className="mono text-xs" style={{ color: "#444" }}>LIVE PREVIEW</span>
+            <span className="mono text-xs px-2 py-0.5 rounded" style={{ background: "#1a1a1a", color: palette.primary }}>{palette.background}</span>
+          </div>
+          <Preview/>
+        </div>
+
+        {/* DESKTOP RIGHT: EXPORT */}
+        <div className="hidden md:flex w-64 flex-col border-l overflow-hidden"
+          style={{ borderColor: "#1a1a1a", background: "#0a0a0a" }}>
+          <div className="p-4 flex-1 flex flex-col gap-3 overflow-hidden">
+            <p className="mono text-xs" style={{ color: "#666", letterSpacing: "0.1em" }}>EXPORT</p>
+            <div className="flex gap-1.5">
+              {(["css","tailwind"] as ExportFmt[]).map(f => (
+                <button key={f} onClick={() => setExportFmt(f)}
+                  className="flex-1 py-2 rounded-lg text-xs font-medium border transition-all mono"
+                  style={{ background: exportFmt === f ? palette.primary : "#111", borderColor: exportFmt === f ? palette.primary : "#2a2a2a", color: exportFmt === f ? "#fff" : "#666" }}>
+                  {f === "css" ? "CSS" : "TW"}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 overflow-y-auto rounded-xl p-3 border mono text-xs leading-relaxed"
+              style={{ background: "#0d0d0d", borderColor: "#2a2a2a", color: "#666" }}>
+              <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{exportCode}</pre>
+            </div>
+            <button onClick={() => { navigator.clipboard.writeText(exportCode); setExportCopied(true); setTimeout(() => setExportCopied(false), 2000); }}
+              className="py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all"
+              style={{ background: exportCopied ? "#22c55e" : palette.primary, color: "#fff" }}>
+              {exportCopied ? <><Check size={14}/> Copied!</> : <><Copy size={14}/> Copy</>}
+            </button>
+          </div>
+        </div>
+
+        {/* MOBILE: Full screen tab content */}
+        <div className="flex md:hidden flex-1 flex-col overflow-hidden">
+          <AnimatePresence mode="wait">
+            <motion.div key={tab} className="flex-1 overflow-y-auto"
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}>
+              {tab === "export" ? (
+                <div className="p-4 flex flex-col gap-3 h-full">
+                  <div className="flex gap-2">
+                    {(["css","tailwind"] as ExportFmt[]).map(f => (
+                      <button key={f} onClick={() => setExportFmt(f)}
+                        className="flex-1 py-3 rounded-xl text-sm font-medium border transition-all mono"
+                        style={{ background: exportFmt === f ? palette.primary : "#111", borderColor: exportFmt === f ? palette.primary : "#2a2a2a", color: exportFmt === f ? "#fff" : "#666" }}>
+                        {f === "css" ? "CSS Variables" : "Tailwind"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex-1 rounded-2xl p-4 border mono text-xs leading-relaxed overflow-y-auto"
+                    style={{ background: "#0d0d0d", borderColor: "#2a2a2a", color: "#888" }}>
+                    <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{exportCode}</pre>
+                  </div>
+                  <button onClick={() => { navigator.clipboard.writeText(exportCode); setExportCopied(true); setTimeout(() => setExportCopied(false), 2000); }}
+                    className="py-4 rounded-2xl text-base font-bold flex items-center justify-center gap-2 transition-all"
+                    style={{ background: exportCopied ? "#22c55e" : palette.primary, color: "#fff" }}>
+                    {exportCopied ? <><Check size={18}/> Copied!</> : <><Copy size={18}/> Copy {exportFmt === "css" ? "CSS Variables" : "Tailwind Config"}</>}
+                  </button>
+                </div>
+              ) : (
+                <InputPanel/>
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* ── MOBILE BOTTOM NAV ── */}
+      <nav className="flex md:hidden flex-shrink-0 border-t" style={{ background: "#0a0a0a", borderColor: "#1a1a1a" }}>
+        {TAB_CONFIG.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className="flex-1 flex flex-col items-center gap-1 py-3 transition-all"
+            style={{ color: tab === t.id ? palette.primary : "#444" }}>
+            <div style={{ color: tab === t.id ? palette.primary : "#444" }}>{t.icon}</div>
+            <span className="text-xs font-medium mono">{t.label}</span>
+            {tab === t.id && <div className="w-4 h-0.5 rounded-full" style={{ background: palette.primary }}/>}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
